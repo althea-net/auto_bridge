@@ -178,13 +178,18 @@ impl TokenBridge {
         );
 
         Box::new(
-            self.dai_to_eth_price(dai_amount.clone())
-                .and_then(move |expected_eth| {
+            web3.eth_block_number()
+                .and_then({
+                    let web3 = web3.clone();
+                    move |current_block| web3.eth_get_block_by_number(current_block)
+                })
+                .join(self.dai_to_eth_price(dai_amount.clone()))
+                .and_then(move |(block, expected_eth)| {
                     // Equivalent to `amount * (1 - 0.025)` without using decimals
                     let expected_eth = (expected_eth / 40u64.into()) * 39u64.into();
                     let payload = encode_call(
                         "tokenToEthSwapInput(uint256,uint256)",
-                        &[expected_eth.into()],
+                        &[expected_eth.into(), block.timestamp.into()],
                     );
 
                     let call = web3.send_transaction(
