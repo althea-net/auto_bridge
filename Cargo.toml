@@ -1,0 +1,12 @@
+[package]
+name = "auto-bridge"
+version = "0.1.0"
+authors = ["Jehan <jehan.tremback@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+web30 = "0.2.1"
+futures = "0.1.26"
+failure = "0.1.5"
+num256 = "0.2.11"
+clarity = "0.1.20"
