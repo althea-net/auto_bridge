@@ -10,7 +10,7 @@ use num256::Uint256;
 use rand::prelude::*;
 use std::time::Duration;
 use web30::client::Web3;
-use web30::types::Log;
+use web30::types::{Block, Log};
 
 // const ALLOWED_SLIPPAGE = 0.025;
 // const TOKEN_ALLOWED_SLIPPAGE = 0.04;
@@ -30,12 +30,7 @@ use web30::types::Log;
 // denominator = input_reserve * 1000 + inputAmount * 997
 // outputAmount = numerator / denominator
 
-pub fn address_to_bytes_32(address: Address) -> [u8; 32] {
-    let mut data: [u8; 32] = Default::default();
-    data[12..].copy_from_slice(&address.as_bytes());
-    data
-}
-
+#[derive(Clone)]
 pub struct TokenBridge {
     xdai_web3: Web3,
     eth_web3: Web3,
@@ -127,26 +122,11 @@ impl TokenBridge {
         let secret = self.secret.clone();
         let web3 = self.eth_web3.clone();
 
-        let own_address_bytes: [u8; 32] = {
-            let mut data: [u8; 32] = Default::default();
-            data[12..].copy_from_slice(&own_address.as_bytes());
-            data
-        };
-
-        let event = web3.wait_for_event(
-            uniswap_address,
-            "TokenPurchase(address,uint256,uint256)",
-            Some(vec![own_address_bytes]),
-            None,
-            None,
-            |_| true,
-        );
-
         Box::new(
             web3.eth_block_number()
                 .and_then({
                     let web3 = web3.clone();
-                    move |current_block| web3.eth_get_block_by_number(current_block)
+                    move |current_block_number| web3.eth_get_block_by_number(current_block_number)
                 })
                 .join(self.eth_to_dai_price(eth_amount.clone()))
                 .and_then(move |(block, expected_dai)| {
@@ -154,26 +134,27 @@ impl TokenBridge {
                     let expected_dai = (expected_dai / 40u64.into()) * 39u64.into();
                     let payload = encode_call(
                         "ethToTokenSwapInput(uint256,uint256)",
-                        &[expected_dai.into(), block.timestamp.into()],
+                        &[expected_dai.clone().into(), block.timestamp.into()],
                     );
 
-                    let call = web3.send_transaction(
-                        uniswap_address,
-                        payload,
-                        eth_amount,
-                        own_address,
-                        secret,
-                    );
-
-                    Box::new(
-                        call.join(event)
-                            .and_then(|(_tx, response)| {
-                                let mut data: [u8; 32] = Default::default();
-                                data.copy_from_slice(&response.data);
-                                Ok(data.into())
-                            })
-                            .into_future(),
-                    )
+                    // Box::new(
+                    web3.send_transaction(uniswap_address, payload, eth_amount, own_address, secret)
+                        .join(web3.wait_for_event(
+                            uniswap_address,
+                            "TokenPurchase(address,uint256,uint256)",
+                            Some(vec![own_address.into()]),
+                            None,
+                            None,
+                            |_| true,
+                        ))
+                        .and_then(move |(_tx, response)| {
+                            let transfered_dai = Uint256::from_bytes_le(&response.topics[3]);
+                            ensure!(
+                                transfered_dai == expected_dai,
+                                "Transfered dai is not equal to expected dai"
+                            );
+                            Ok(transfered_dai)
+                        })
                 }),
         )
     }
@@ -188,15 +169,6 @@ impl TokenBridge {
         let secret = self.secret.clone();
         let web3 = self.eth_web3.clone();
 
-        let event = web3.wait_for_event(
-            uniswap_address,
-            "TokenPurchase(address,uint256,uint256)",
-            Some(vec![own_address.into()]),
-            None,
-            None,
-            |_| true,
-        );
-
         Box::new(
             web3.eth_block_number()
                 .and_then({
@@ -207,89 +179,83 @@ impl TokenBridge {
                 .and_then(move |(block, expected_eth)| {
                     // Equivalent to `amount * (1 - 0.025)` without using decimals
                     let expected_eth = (expected_eth / 40u64.into()) * 39u64.into();
-                    let payload = encode_call(
-                        "tokenToEthSwapInput(uint256,uint256,uint256)",
-                        &[
-                            dai_amount.into(),
-                            expected_eth.into(),
-                            block.timestamp.into(),
-                        ],
-                    );
-
-                    let call = web3.send_transaction(
-                        uniswap_address,
-                        payload,
-                        0u32.into(),
-                        own_address,
-                        secret,
-                    );
 
                     Box::new(
-                        call.join(event)
-                            .and_then(|(_tx, response)| {
-                                let mut data: [u8; 32] = Default::default();
-                                data.copy_from_slice(&response.data);
-                                Ok(data.into())
-                            })
-                            .into_future(),
+                        web3.send_transaction(
+                            uniswap_address,
+                            encode_call(
+                                "tokenToEthSwapInput(uint256,uint256,uint256)",
+                                &[
+                                    dai_amount.into(),
+                                    expected_eth.clone().into(),
+                                    block.timestamp.into(),
+                                ],
+                            ),
+                            0u32.into(),
+                            own_address,
+                            secret,
+                        )
+                        .join(web3.wait_for_event(
+                            uniswap_address,
+                            "EthPurchase(address,uint256,uint256)",
+                            Some(vec![own_address.into()]),
+                            None,
+                            None,
+                            |_| true,
+                        ))
+                        .and_then(move |(_tx, response)| {
+                            // let mut data: [u8; 32] = Default::default();
+                            // data.copy_from_slice(&response.data);
+                            // Ok(data.into())
+                            let transfered_eth = Uint256::from_bytes_le(&response.topics[3]);
+                            ensure!(
+                                transfered_eth == expected_eth,
+                                "Transfered eth is not equal to expected eth"
+                            );
+                            Ok(transfered_eth)
+                        }),
                     )
                 }),
         )
     }
 
-    /// Convert `dai_amount` dai to xdai
+    /// Convert `dai_amount` dai to xdai. This doesn't currently let you know when the transfer is done.
+    /// In most use cases, it should be ok to just let the user notice when their balance has increased.
+    /// The xDai chain seems to transfer tokens from the bridge by giving the receiving account a block
+    /// reward so there is no transfer event. There are events that are fired for but for some crazy reason,
+    /// they decided not to make these events indexed so they cannot be listened for:
+    /// https://forum.poa.network/t/how-to-relay-dai-stablecoins-without-usage-of-the-bridge-ui/1876/5?u=jtremback
+    ///
+    /// Not sure how valuable it is for us to fix their bridge since we will be using Cosmos soon anyway.
+    /// Making the events indexed would be a breaking change since it would change the API. Getting
+    /// a PR with the indexed events merged and deployed could be a struggle. Another option would be
+    /// to index the unindexed properties ourselves with something like The Graph.
+
     pub fn dai_to_xdai_bridge(
         &self,
         dai_amount: Uint256,
-    ) -> Box<Future<Item = Log, Error = Error>> {
-        let xdai_web3 = self.xdai_web3.clone();
+    ) -> Box<Future<Item = Uint256, Error = Error>> {
         let eth_web3 = self.eth_web3.clone();
         let xdai_home_bridge_address = self.xdai_home_bridge_address.clone();
         let xdai_foreign_bridge_address = self.xdai_home_bridge_address.clone();
-        let foreign_dai_contract_address = self.foreign_dai_contract_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
 
-        // We tag the amount with a small random number so that we can identify it later
-        let tagged_amount: Uint256 = dai_amount + rand::random::<u16>().into();
-
-        let payload = encode_call(
-            "transfer(address,uint256)",
-            &[
-                xdai_foreign_bridge_address.into(),
-                tagged_amount.clone().into(),
-            ],
-        );
-
         // You basically just send it some coins
-        Box::new(
-            xdai_web3
-                .send_transaction(
-                    xdai_home_bridge_address,
-                    payload,
-                    0u32.into(),
-                    own_address,
-                    secret,
-                )
-                .and_then(move |_| {
-                    eth_web3.wait_for_event(
-                        foreign_dai_contract_address,
-                        "Transfer(address,address,uint256)",
-                        Some(vec![xdai_foreign_bridge_address.into()]),
-                        Some(vec![own_address.into()]),
-                        None,
-                        move |log| Uint256::from_bytes_be(&log.data) == tagged_amount,
-                    )
-                })
-                .and_then(|log| futures::future::ok(log)),
-        )
+        Box::new(eth_web3.send_transaction(
+            xdai_home_bridge_address,
+            encode_call(
+                "transfer(address,uint256)",
+                &[
+                    xdai_foreign_bridge_address.into(),
+                    dai_amount.clone().into(),
+                ],
+            ),
+            0u32.into(),
+            own_address,
+            secret,
+        ))
     }
-
-    // var ethers = require("ethers")
-
-    // var parm = ethers.utils.defaultAbiCoder.decode(["uint256"], "0x00000000000000000000000000000000000000000000000001ade0dbe1d28000").toString();
-
-    // console.log(parm)
 
     /// Convert `xdai_amount` xdai to dai
     /// As part of the conversion the amount to be sent is "tagged" by adding a tiny amount to it,
@@ -328,6 +294,30 @@ impl TokenBridge {
                     move |log| Uint256::from_bytes_be(&log.data) == tagged_amount,
                 ))
                 .and_then(|(_, log)| futures::future::ok(log)),
+        )
+    }
+
+    pub fn convert_eth_to_xdai(
+        &self,
+        eth_amount: Uint256,
+    ) -> Box<Future<Item = Uint256, Error = Error>> {
+        let salf = self.clone();
+
+        Box::new(
+            salf.eth_to_dai_swap(eth_amount)
+                .and_then(move |dai_amount| salf.dai_to_xdai_bridge(dai_amount)),
+        )
+    }
+
+    pub fn convert_xdai_to_eth(
+        &self,
+        xdai_amount: Uint256,
+    ) -> Box<Future<Item = Uint256, Error = Error>> {
+        let salf = self.clone();
+
+        Box::new(
+            salf.xdai_to_dai_bridge(xdai_amount.clone())
+                .and_then(move |_| salf.dai_to_eth_swap(xdai_amount)),
         )
     }
 }
