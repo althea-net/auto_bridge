@@ -1,34 +1,11 @@
-use clarity::abi::derive_signature;
-use clarity::abi::{encode_call, Token};
-use clarity::utils::bytes_to_hex_str;
-use clarity::Transaction;
+use clarity::abi::encode_call;
 use clarity::{Address, PrivateKey};
 use failure::{ensure, Error};
-use futures::{Future, IntoFuture};
-use futures_timer::Delay;
+use futures::Future;
 use num256::Uint256;
-use rand::prelude::*;
-use std::time::Duration;
+use std::str::FromStr;
 use web30::client::Web3;
-use web30::types::{Block, Log};
-
-// const ALLOWED_SLIPPAGE = 0.025;
-// const TOKEN_ALLOWED_SLIPPAGE = 0.04;
-
-// // Sell ETH for ERC20
-// inputAmount = userInputEthValue
-// input_reserve = web3.eth.getBalance(exchangeAddress)
-// output_reserve = tokenContract.methods.balanceOf(exchangeAddress)
-
-// // Sell ERC20 for ETH
-// inputAmount = userInputTokenValue
-// input_reserve = tokenContract.methods.balanceOf(exchangeAddress)
-// output_reserve = web3.eth.getBalance(exchangeAddress)
-
-// // Output amount bought
-// numerator = inputAmount * output_reserve * 997
-// denominator = input_reserve * 1000 + inputAmount * 997
-// outputAmount = numerator / denominator
+use web30::types::Log;
 
 #[derive(Clone)]
 pub struct TokenBridge {
@@ -53,8 +30,8 @@ impl TokenBridge {
         foreign_dai_contract_address: Address,
         own_address: Address,
         secret: PrivateKey,
-        eth_full_node_url: &String,
-        xdai_full_node_url: &String,
+        eth_full_node_url: String,
+        xdai_full_node_url: String,
     ) -> TokenBridge {
         TokenBridge {
             uniswap_address,
@@ -63,13 +40,13 @@ impl TokenBridge {
             foreign_dai_contract_address,
             own_address,
             secret,
-            xdai_web3: Web3::new(xdai_full_node_url),
-            eth_web3: Web3::new(eth_full_node_url),
+            xdai_web3: Web3::new(&xdai_full_node_url),
+            eth_web3: Web3::new(&eth_full_node_url),
         }
     }
 
     /// Price of ETH in Dai
-    pub fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
@@ -91,7 +68,7 @@ impl TokenBridge {
     }
 
     /// Price of Dai in ETH
-    pub fn dai_to_eth_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    fn dai_to_eth_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
@@ -113,15 +90,11 @@ impl TokenBridge {
     }
 
     /// Sell `eth_amount` ETH for Dai
-    pub fn eth_to_dai_swap(
-        &self,
-        eth_amount: Uint256,
-    ) -> Box<Future<Item = Uint256, Error = Error>> {
+    fn eth_to_dai_swap(&self, eth_amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
         let web3 = self.eth_web3.clone();
-
         Box::new(
             web3.eth_block_number()
                 .and_then({
@@ -160,10 +133,7 @@ impl TokenBridge {
     }
 
     /// Sell `dai_amount` Dai for ETH
-    pub fn dai_to_eth_swap(
-        &self,
-        dai_amount: Uint256,
-    ) -> Box<Future<Item = Uint256, Error = Error>> {
+    fn dai_to_eth_swap(&self, dai_amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
@@ -231,7 +201,7 @@ impl TokenBridge {
     /// a PR with the indexed events merged and deployed could be a struggle. Another option would be
     /// to index the unindexed properties ourselves with something like The Graph.
 
-    pub fn dai_to_xdai_bridge(
+    fn dai_to_xdai_bridge(
         &self,
         dai_amount: Uint256,
     ) -> Box<Future<Item = Uint256, Error = Error>> {
@@ -260,10 +230,7 @@ impl TokenBridge {
     /// Convert `xdai_amount` xdai to dai
     /// As part of the conversion the amount to be sent is "tagged" by adding a tiny amount to it,
     /// up to 65 kwei
-    pub fn xdai_to_dai_bridge(
-        &self,
-        xdai_amount: Uint256,
-    ) -> Box<Future<Item = Log, Error = Error>> {
+    fn xdai_to_dai_bridge(&self, xdai_amount: Uint256) -> Box<Future<Item = Log, Error = Error>> {
         let xdai_web3 = self.xdai_web3.clone();
         let eth_web3 = self.eth_web3.clone();
         let xdai_home_bridge_address = self.xdai_home_bridge_address.clone();
@@ -324,8 +291,66 @@ impl TokenBridge {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use actix;
+
+    fn new_token_bridge() -> TokenBridge {
+        TokenBridge::new(
+            Address::from_str("0x09cabEC1eAd1c0Ba254B09efb3EE13841712bE14".into()).unwrap(),
+            Address::from_str("0x7301CFA0e1756B71869E93d4e4Dca5c7d0eb0AA6".into()).unwrap(),
+            Address::from_str("0x4aa42145Aa6Ebf72e164C9bBC74fbD3788045016".into()).unwrap(),
+            Address::from_str("0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359".into()).unwrap(),
+            Address::from_str("0x46efca97bCD20544616D6Df1724628b5b26eB413".into()).unwrap(),
+            PrivateKey::from_str(
+                "1F804A16150F4C0E1EB966A9BAE9683FF4E760EF189BA98C98477081C334E123".into(),
+            )
+            .unwrap(),
+            "https://mainnet.infura.io/v3/4bd80ea13e964a5a9f728a68567dc784".into(),
+            "https://dai.poa.network".into(),
+        )
+    }
+
+    fn eth_to_wei(eth: f64) -> Uint256 {
+        let wei = (eth * 1000000000000000000f64) as u64;
+        wei.into()
+    }
+
     #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    fn get_block() {
+        let system = actix::System::new("test");
+        let tb = new_token_bridge();
+
+        actix::spawn(
+            tb.eth_web3
+                .eth_block_number()
+                .and_then({
+                    let web3 = tb.eth_web3.clone();
+                    move |current_block_number| web3.eth_get_block_by_number(current_block_number)
+                })
+                .then(|derp| {
+                    println!("{:?}", derp);
+                    actix::System::current().stop();
+                    Box::new(futures::future::ok(()))
+                }),
+        );
+
+        system.run();
+    }
+
+    #[test]
+    fn eth_to_xdai() {
+        let system = actix::System::new("test");
+
+        actix::spawn(
+            new_token_bridge()
+                .convert_eth_to_xdai(eth_to_wei(0.001f64))
+                .then(|derp| {
+                    println!("{:?}", derp);
+                    actix::System::current().stop();
+                    Box::new(futures::future::ok(()))
+                }),
+        );
+
+        system.run();
     }
 }
