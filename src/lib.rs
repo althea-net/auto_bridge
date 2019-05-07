@@ -49,18 +49,25 @@ impl TokenBridge {
     fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
+        let dai_address = self.foreign_dai_contract_address.clone();
         let own_address = self.own_address.clone();
 
         let props = web3
             .eth_get_balance(uniswap_address)
             .join(web3.contract_call(
-                uniswap_address,
+                dai_address,
                 "balanceOf(address)",
-                &[own_address.into()],
+                &[uniswap_address.into()],
                 own_address,
             ));
 
         Box::new(props.and_then(move |(input_reserve, output_reserve)| {
+            let output_reserve = Uint256::from_bytes_be(
+                output_reserve
+                    .get(0..32)
+                    .expect("Malformed output from uniswap balanceOf call"),
+            );
+            println!("SHATNER {:?}, {:?}", input_reserve, output_reserve);
             let numerator = amount.clone() * output_reserve * 997u64.into();
             let denominator = input_reserve * 1000u64.into() + amount * 997u64.into();
             Ok(numerator / denominator)
@@ -83,6 +90,11 @@ impl TokenBridge {
             ));
 
         Box::new(props.and_then(move |(output_reserve, input_reserve)| {
+            let input_reserve = Uint256::from_bytes_be(
+                input_reserve
+                    .get(0..32)
+                    .expect("Malformed output from uniswap balanceOf call"),
+            );
             let numerator = amount.clone() * output_reserve * 997u64.into();
             let denominator = input_reserve * 1000u64.into() + amount * 997u64.into();
             Ok(numerator / denominator)
@@ -112,7 +124,7 @@ impl TokenBridge {
 
                     // Box::new(
                     web3.send_transaction(uniswap_address, payload, eth_amount, own_address, secret)
-                        .join(web3.wait_for_event(
+                        .join(web3.wait_for_event_alt(
                             uniswap_address,
                             "TokenPurchase(address,uint256,uint256)",
                             Some(vec![own_address.into()]),
@@ -165,7 +177,7 @@ impl TokenBridge {
                             own_address,
                             secret,
                         )
-                        .join(web3.wait_for_event(
+                        .join(web3.wait_for_event_alt(
                             uniswap_address,
                             "EthPurchase(address,uint256,uint256)",
                             Some(vec![own_address.into()]),
@@ -252,7 +264,7 @@ impl TokenBridge {
                     own_address,
                     secret,
                 )
-                .join(eth_web3.wait_for_event(
+                .join(eth_web3.wait_for_event_alt(
                     foreign_dai_contract_address,
                     "Transfer(address,address,uint256)",
                     Some(vec![xdai_foreign_bridge_address.into()]),
