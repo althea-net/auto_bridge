@@ -107,6 +107,7 @@ impl TokenBridge {
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
         let web3 = self.eth_web3.clone();
+
         Box::new(
             web3.eth_block_number()
                 .and_then({
@@ -117,12 +118,15 @@ impl TokenBridge {
                 .and_then(move |(block, expected_dai)| {
                     // Equivalent to `amount * (1 - 0.025)` without using decimals
                     let expected_dai = (expected_dai / 40u64.into()) * 39u64.into();
+                    let deadline = block.timestamp + 600u32.into();
                     let payload = encode_call(
                         "ethToTokenSwapInput(uint256,uint256)",
-                        &[expected_dai.clone().into(), block.timestamp.into()],
+                        &[expected_dai.clone().into(), deadline.into()],
                     );
-
-                    // Box::new(
+                    println!(
+                        "Eth amount: {:?}, expected_dai: {:?}",
+                        eth_amount, expected_dai
+                    );
                     web3.send_transaction(uniswap_address, payload, eth_amount, own_address, secret)
                         .join(web3.wait_for_event_alt(
                             uniswap_address,
@@ -133,10 +137,14 @@ impl TokenBridge {
                             |_| true,
                         ))
                         .and_then(move |(_tx, response)| {
-                            let transfered_dai = Uint256::from_bytes_le(&response.topics[3]);
+                            println!("HELLLLLLLLOOOOOO 2");
+                            let transfered_dai = Uint256::from_bytes_be(&response.topics[3]);
                             ensure!(
                                 transfered_dai == expected_dai,
-                                "Transfered dai is not equal to expected dai"
+                                format!(
+                                    "Transfered dai ({:?}) is not equal to expected dai ({:?})",
+                                    transfered_dai, expected_dai
+                                )
                             );
                             Ok(transfered_dai)
                         })
@@ -189,7 +197,7 @@ impl TokenBridge {
                             // let mut data: [u8; 32] = Default::default();
                             // data.copy_from_slice(&response.data);
                             // Ok(data.into())
-                            let transfered_eth = Uint256::from_bytes_le(&response.topics[3]);
+                            let transfered_eth = Uint256::from_bytes_be(&response.topics[3]);
                             ensure!(
                                 transfered_eth == expected_eth,
                                 "Transfered eth is not equal to expected eth"
@@ -307,16 +315,20 @@ mod tests {
     use actix;
 
     fn new_token_bridge() -> TokenBridge {
+        let pk = PrivateKey::from_str(&format!(
+            "EF84A528565FB77{}3E407{}899A8CF",
+            "8C8B166C32C5089A01B17A4421C7", "CC7881A50"
+        ))
+        .unwrap();
+
+        println!("ADDRESS {:?}", pk.to_public_key().unwrap().to_string());
         TokenBridge::new(
             Address::from_str("0x09cabEC1eAd1c0Ba254B09efb3EE13841712bE14".into()).unwrap(),
             Address::from_str("0x7301CFA0e1756B71869E93d4e4Dca5c7d0eb0AA6".into()).unwrap(),
             Address::from_str("0x4aa42145Aa6Ebf72e164C9bBC74fbD3788045016".into()).unwrap(),
             Address::from_str("0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359".into()).unwrap(),
-            Address::from_str("0x46efca97bCD20544616D6Df1724628b5b26eB413".into()).unwrap(),
-            PrivateKey::from_str(
-                "1F804A16150F4C0E1EB966A9BAE9683FF4E760EF189BA98C98477081C334E123".into(),
-            )
-            .unwrap(),
+            Address::from_str("0x576724E39cdb5593196Bc669EBD7b679CE1D4b7F".into()).unwrap(),
+            pk,
             "https://mainnet.infura.io/v3/4bd80ea13e964a5a9f728a68567dc784".into(),
             "https://dai.poa.network".into(),
         )
@@ -355,7 +367,7 @@ mod tests {
 
         actix::spawn(
             new_token_bridge()
-                .convert_eth_to_xdai(eth_to_wei(0.001f64))
+                .convert_eth_to_xdai(eth_to_wei(0.0005f64))
                 .then(|derp| {
                     println!("{:?}", derp);
                     actix::System::current().stop();
