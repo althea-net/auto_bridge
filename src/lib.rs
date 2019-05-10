@@ -67,7 +67,7 @@ impl TokenBridge {
                     .get(0..32)
                     .expect("Malformed output from uniswap balanceOf call"),
             );
-            println!("SHATNER {:?}, {:?}", input_reserve, output_reserve);
+
             let numerator = amount.clone() * output_reserve * 997u64.into();
             let denominator = input_reserve * 1000u64.into() + amount * 997u64.into();
             Ok(numerator / denominator)
@@ -123,10 +123,7 @@ impl TokenBridge {
                         "ethToTokenSwapInput(uint256,uint256)",
                         &[expected_dai.clone().into(), deadline.into()],
                     );
-                    println!(
-                        "Eth amount: {:?}, expected_dai: {:?}",
-                        eth_amount, expected_dai
-                    );
+
                     web3.send_transaction(uniswap_address, payload, eth_amount, own_address, secret)
                         .join(web3.wait_for_event_alt(
                             uniswap_address,
@@ -137,15 +134,7 @@ impl TokenBridge {
                             |_| true,
                         ))
                         .and_then(move |(_tx, response)| {
-                            println!("HELLLLLLLLOOOOOO 2");
                             let transfered_dai = Uint256::from_bytes_be(&response.topics[3]);
-                            ensure!(
-                                transfered_dai == expected_dai,
-                                format!(
-                                    "Transfered dai ({:?}) is not equal to expected dai ({:?})",
-                                    transfered_dai, expected_dai
-                                )
-                            );
                             Ok(transfered_dai)
                         })
                 }),
@@ -321,7 +310,6 @@ mod tests {
         ))
         .unwrap();
 
-        println!("ADDRESS {:?}", pk.to_public_key().unwrap().to_string());
         TokenBridge::new(
             Address::from_str("0x09cabEC1eAd1c0Ba254B09efb3EE13841712bE14".into()).unwrap(),
             Address::from_str("0x7301CFA0e1756B71869E93d4e4Dca5c7d0eb0AA6".into()).unwrap(),
@@ -340,36 +328,13 @@ mod tests {
     }
 
     #[test]
-    fn get_block() {
-        let system = actix::System::new("test");
-        let tb = new_token_bridge();
-
-        actix::spawn(
-            tb.eth_web3
-                .eth_block_number()
-                .and_then({
-                    let web3 = tb.eth_web3.clone();
-                    move |current_block_number| web3.eth_get_block_by_number(current_block_number)
-                })
-                .then(|derp| {
-                    println!("{:?}", derp);
-                    actix::System::current().stop();
-                    Box::new(futures::future::ok(()))
-                }),
-        );
-
-        system.run();
-    }
-
-    #[test]
     fn eth_to_xdai() {
         let system = actix::System::new("test");
 
         actix::spawn(
             new_token_bridge()
                 .convert_eth_to_xdai(eth_to_wei(0.0005f64))
-                .then(|derp| {
-                    println!("{:?}", derp);
+                .then(|_| {
                     actix::System::current().stop();
                     Box::new(futures::future::ok(()))
                 }),
