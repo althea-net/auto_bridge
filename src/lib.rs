@@ -124,19 +124,26 @@ impl TokenBridge {
                         &[expected_dai.clone().into(), deadline.into()],
                     );
 
-                    web3.send_transaction(uniswap_address, payload, eth_amount, own_address, secret)
-                        .join(web3.wait_for_event_alt(
-                            uniswap_address,
-                            "TokenPurchase(address,uint256,uint256)",
-                            Some(vec![own_address.into()]),
-                            None,
-                            None,
-                            |_| true,
-                        ))
-                        .and_then(move |(_tx, response)| {
-                            let transfered_dai = Uint256::from_bytes_be(&response.topics[3]);
-                            Ok(transfered_dai)
-                        })
+                    web3.send_transaction(
+                        uniswap_address,
+                        payload,
+                        eth_amount,
+                        own_address,
+                        secret,
+                        None,
+                    )
+                    .join(web3.wait_for_event_alt(
+                        uniswap_address,
+                        "TokenPurchase(address,uint256,uint256)",
+                        Some(vec![own_address.into()]),
+                        None,
+                        None,
+                        |_| true,
+                    ))
+                    .and_then(move |(_tx, response)| {
+                        let transfered_dai = Uint256::from_bytes_be(&response.topics[3]);
+                        Ok(transfered_dai)
+                    })
                 }),
         )
     }
@@ -173,6 +180,7 @@ impl TokenBridge {
                             0u32.into(),
                             own_address,
                             secret,
+                            None,
                         )
                         .join(web3.wait_for_event_alt(
                             uniswap_address,
@@ -215,14 +223,15 @@ impl TokenBridge {
         dai_amount: Uint256,
     ) -> Box<Future<Item = Uint256, Error = Error>> {
         let eth_web3 = self.eth_web3.clone();
-        let xdai_home_bridge_address = self.xdai_home_bridge_address.clone();
-        let xdai_foreign_bridge_address = self.xdai_home_bridge_address.clone();
+        let foreign_dai_contract_address = self.foreign_dai_contract_address.clone();
+        let xdai_foreign_bridge_address = self.xdai_foreign_bridge_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
 
         // You basically just send it some coins
+        // We have no idea when this has succeeded since the events are not indexed
         Box::new(eth_web3.send_transaction(
-            xdai_home_bridge_address,
+            foreign_dai_contract_address,
             encode_call(
                 "transfer(address,uint256)",
                 &[
@@ -233,6 +242,7 @@ impl TokenBridge {
             0u32.into(),
             own_address,
             secret,
+            None,
         ))
     }
 
@@ -256,10 +266,11 @@ impl TokenBridge {
             xdai_web3
                 .send_transaction(
                     xdai_home_bridge_address,
-                    [].to_vec(),
+                    vec![],
                     tagged_amount.clone(),
                     own_address,
                     secret,
+                    Some(250_000_000_000u128.into()),
                 )
                 .join(eth_web3.wait_for_event_alt(
                     foreign_dai_contract_address,
@@ -318,7 +329,7 @@ mod tests {
             Address::from_str("0x576724E39cdb5593196Bc669EBD7b679CE1D4b7F".into()).unwrap(),
             pk,
             "https://mainnet.infura.io/v3/4bd80ea13e964a5a9f728a68567dc784".into(),
-            "https://dai.poa.network".into(),
+            "https://dai.althea.org".into(),
         )
     }
 
@@ -327,14 +338,32 @@ mod tests {
         wei.into()
     }
 
+    fn get_balances(
+        token_bridge: TokenBridge,
+    ) -> Box<Future<Item = (Uint256, Uint256), Error = Error>> {
+        Box::new(
+            token_bridge
+                .eth_web3
+                .eth_get_balance(token_bridge.own_address)
+                .join(
+                    token_bridge
+                        .xdai_web3
+                        .eth_get_balance(token_bridge.own_address),
+                ),
+        )
+    }
+
     #[test]
     fn eth_to_xdai() {
         let system = actix::System::new("test");
 
+        let token_bridge = new_token_bridge();
+
         actix::spawn(
-            new_token_bridge()
+            token_bridge
                 .convert_eth_to_xdai(eth_to_wei(0.0005f64))
-                .then(|_| {
+                .then(|res| {
+                    res.unwrap();
                     actix::System::current().stop();
                     Box::new(futures::future::ok(()))
                 }),
@@ -342,4 +371,32 @@ mod tests {
 
         system.run();
     }
+
+    #[test]
+    fn xdai_to_eth() {
+        // println!(
+        //     "TAMARIOOOOOOO: {:#x}",
+        //     Address::from_slice(&[
+        //         222, 108, 47, 103, 187, 188, 102, 220, 174, 114, 83, 226, 155, 193, 123, 244, 225,
+        //         235, 94, 14
+        //     ])
+        //     .unwrap()
+        // );
+        let system = actix::System::new("test");
+
+        let token_bridge = new_token_bridge();
+
+        actix::spawn(
+            token_bridge
+                .convert_xdai_to_eth(eth_to_wei(0.08f64))
+                .then(|res| {
+                    res.unwrap();
+                    actix::System::current().stop();
+                    Box::new(futures::future::ok(()))
+                }),
+        );
+
+        system.run();
+    }
+
 }
