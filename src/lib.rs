@@ -4,8 +4,11 @@ use failure::{ensure, Error};
 use futures::Future;
 use num256::Uint256;
 use std::str::FromStr;
+use std::time::Duration;
 use web30::client::Web3;
 use web30::types::Log;
+
+use futures_timer::FutureExt;
 
 #[derive(Clone)]
 pub struct TokenBridge {
@@ -46,7 +49,7 @@ impl TokenBridge {
     }
 
     /// Price of ETH in Dai
-    fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    pub fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let dai_address = self.foreign_dai_contract_address.clone();
@@ -75,17 +78,18 @@ impl TokenBridge {
     }
 
     /// Price of Dai in ETH
-    fn dai_to_eth_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    pub fn dai_to_eth_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
+        let dai_address = self.foreign_dai_contract_address.clone();
         let own_address = self.own_address.clone();
 
         let props = web3
             .eth_get_balance(uniswap_address)
             .join(web3.contract_call(
-                uniswap_address,
+                dai_address,
                 "balanceOf(address)",
-                &[own_address.into()],
+                &[uniswap_address.into()],
                 own_address,
             ));
 
@@ -101,24 +105,26 @@ impl TokenBridge {
         }))
     }
 
-    /// Sell `eth_amount` ETH for Dai
-    fn eth_to_dai_swap(&self, eth_amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    /// Sell `eth_amount` ETH for Dai.
+    /// Thsi function will error out if it takes longer than 'timeout' and the transaction is guaranteed not
+    /// to be accepted on the blockchain after this time.
+    pub fn eth_to_dai_swap(
+        &self,
+        eth_amount: Uint256,
+        timeout: u64,
+    ) -> Box<Future<Item = Uint256, Error = Error>> {
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
         let web3 = self.eth_web3.clone();
 
         Box::new(
-            web3.eth_block_number()
-                .and_then({
-                    let web3 = web3.clone();
-                    move |current_block_number| web3.eth_get_block_by_number(current_block_number)
-                })
+            web3.eth_get_latest_block()
                 .join(self.eth_to_dai_price(eth_amount.clone()))
                 .and_then(move |(block, expected_dai)| {
                     // Equivalent to `amount * (1 - 0.025)` without using decimals
                     let expected_dai = (expected_dai / 40u64.into()) * 39u64.into();
-                    let deadline = block.timestamp + 600u32.into();
+                    let deadline = block.timestamp + timeout.into();
                     let payload = encode_call(
                         "ethToTokenSwapInput(uint256,uint256)",
                         &[expected_dai.clone().into(), deadline.into()],
@@ -131,15 +137,19 @@ impl TokenBridge {
                         own_address,
                         secret,
                         None,
+                        None,
                     )
-                    .join(web3.wait_for_event_alt(
-                        uniswap_address,
-                        "TokenPurchase(address,uint256,uint256)",
-                        Some(vec![own_address.into()]),
-                        None,
-                        None,
-                        |_| true,
-                    ))
+                    .join(
+                        web3.wait_for_event_alt(
+                            uniswap_address,
+                            "TokenPurchase(address,uint256,uint256)",
+                            Some(vec![own_address.into()]),
+                            None,
+                            None,
+                            |_| true,
+                        )
+                        .timeout(Duration::from_secs(timeout)),
+                    )
                     .and_then(move |(_tx, response)| {
                         let transfered_dai = Uint256::from_bytes_be(&response.topics[3]);
                         Ok(transfered_dai)
@@ -149,76 +159,66 @@ impl TokenBridge {
     }
 
     /// Sell `dai_amount` Dai for ETH
-    fn dai_to_eth_swap(&self, dai_amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    /// Thsi function will error out if it takes longer than 'timeout' and the transaction is guaranteed not
+    /// to be accepted on the blockchain after this time.
+    pub fn dai_to_eth_swap(
+        &self,
+        dai_amount: Uint256,
+        timeout: u64,
+    ) -> Box<Future<Item = Uint256, Error = Error>> {
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
         let web3 = self.eth_web3.clone();
 
         Box::new(
-            web3.eth_block_number()
-                .and_then({
-                    let web3 = web3.clone();
-                    move |current_block| web3.eth_get_block_by_number(current_block)
-                })
+            web3.eth_get_latest_block()
                 .join(self.dai_to_eth_price(dai_amount.clone()))
                 .and_then(move |(block, expected_eth)| {
                     // Equivalent to `amount * (1 - 0.025)` without using decimals
                     let expected_eth = (expected_eth / 40u64.into()) * 39u64.into();
 
-                    Box::new(
-                        web3.send_transaction(
-                            uniswap_address,
-                            encode_call(
-                                "tokenToEthSwapInput(uint256,uint256,uint256)",
-                                &[
-                                    dai_amount.into(),
-                                    expected_eth.clone().into(),
-                                    block.timestamp.into(),
-                                ],
-                            ),
-                            0u32.into(),
-                            own_address,
-                            secret,
-                            None,
-                        )
-                        .join(web3.wait_for_event_alt(
+                    let deadline = block.timestamp + timeout.into();
+                    let payload = encode_call(
+                        "tokenToEthSwapInput(uint256,uint256,uint256)",
+                        &[
+                            dai_amount.into(),
+                            expected_eth.clone().into(),
+                            deadline.into(),
+                        ],
+                    );
+           
+                    web3.send_transaction(
+                        uniswap_address,
+                        payload,
+                        0u32.into(),
+                        own_address,
+                        secret,
+                        None,
+                        None,
+                    )
+                    .join(
+                        web3.wait_for_event_alt(
                             uniswap_address,
                             "EthPurchase(address,uint256,uint256)",
                             Some(vec![own_address.into()]),
                             None,
                             None,
                             |_| true,
-                        ))
-                        .and_then(move |(_tx, response)| {
-                            // let mut data: [u8; 32] = Default::default();
-                            // data.copy_from_slice(&response.data);
-                            // Ok(data.into())
-                            let transfered_eth = Uint256::from_bytes_be(&response.topics[3]);
-                            ensure!(
-                                transfered_eth == expected_eth,
-                                "Transfered eth is not equal to expected eth"
-                            );
-                            Ok(transfered_eth)
-                        }),
+                        )
+                        .timeout(Duration::from_secs(timeout)),
                     )
+                    .and_then(move |(_tx, response)| {
+                        let transfered_eth = Uint256::from_bytes_be(&response.topics[3]);
+                        Ok(transfered_eth)
+                    })
+                   
                 }),
         )
     }
 
-    /// Convert `dai_amount` dai to xdai. This doesn't currently let you know when the transfer is done.
-    /// In most use cases, it should be ok to just let the user notice when their balance has increased.
-    /// The xDai chain seems to transfer tokens from the bridge by giving the receiving account a block
-    /// reward so there is no transfer event. There are events that are fired for but for some crazy reason,
-    /// they decided not to make these events indexed so they cannot be listened for:
-    /// https://forum.poa.network/t/how-to-relay-dai-stablecoins-without-usage-of-the-bridge-ui/1876/5?u=jtremback
-    ///
-    /// Not sure how valuable it is for us to fix their bridge since we will be using Cosmos soon anyway.
-    /// Making the events indexed would be a breaking change since it would change the API. Getting
-    /// a PR with the indexed events merged and deployed could be a struggle. Another option would be
-    /// to index the unindexed properties ourselves with something like The Graph.
-
-    fn dai_to_xdai_bridge(
+    /// Bridge `dai_amount` dai to xdai
+    pub fn dai_to_xdai_bridge(
         &self,
         dai_amount: Uint256,
     ) -> Box<Future<Item = Uint256, Error = Error>> {
@@ -243,69 +243,32 @@ impl TokenBridge {
             own_address,
             secret,
             None,
+            None,
         ))
     }
 
-    /// Convert `xdai_amount` xdai to dai
-    /// As part of the conversion the amount to be sent is "tagged" by adding a tiny amount to it,
-    /// up to 65 kwei
-    fn xdai_to_dai_bridge(&self, xdai_amount: Uint256) -> Box<Future<Item = Log, Error = Error>> {
-        let xdai_web3 = self.xdai_web3.clone();
-        let eth_web3 = self.eth_web3.clone();
-        let xdai_home_bridge_address = self.xdai_home_bridge_address.clone();
-        let xdai_foreign_bridge_address = self.xdai_home_bridge_address.clone();
-        let foreign_dai_contract_address = self.foreign_dai_contract_address.clone();
-        let own_address = self.own_address.clone();
-        let secret = self.secret.clone();
-
-        // We tag the amount with a small random number so that we can identify it later
-        let tagged_amount: Uint256 = xdai_amount + rand::random::<u16>().into();
-
-        // You basically just send it some coins
-        Box::new(
-            xdai_web3
-                .send_transaction(
-                    xdai_home_bridge_address,
-                    vec![],
-                    tagged_amount.clone(),
-                    own_address,
-                    secret,
-                    Some(250_000_000_000u128.into()),
-                )
-                .join(eth_web3.wait_for_event_alt(
-                    foreign_dai_contract_address,
-                    "Transfer(address,address,uint256)",
-                    Some(vec![xdai_foreign_bridge_address.into()]),
-                    Some(vec![own_address.into()]),
-                    None,
-                    move |log| Uint256::from_bytes_be(&log.data) == tagged_amount,
-                ))
-                .and_then(|(_, log)| futures::future::ok(log)),
-        )
-    }
-
-    pub fn convert_eth_to_xdai(
-        &self,
-        eth_amount: Uint256,
-    ) -> Box<Future<Item = Uint256, Error = Error>> {
-        let salf = self.clone();
-
-        Box::new(
-            salf.eth_to_dai_swap(eth_amount)
-                .and_then(move |dai_amount| salf.dai_to_xdai_bridge(dai_amount)),
-        )
-    }
-
-    pub fn convert_xdai_to_eth(
+    /// Bridge `xdai_amount` xdai to dai
+    pub fn xdai_to_dai_bridge(
         &self,
         xdai_amount: Uint256,
     ) -> Box<Future<Item = Uint256, Error = Error>> {
-        let salf = self.clone();
+        let xdai_web3 = self.xdai_web3.clone();
 
-        Box::new(
-            salf.xdai_to_dai_bridge(xdai_amount.clone())
-                .and_then(move |_| salf.dai_to_eth_swap(xdai_amount)),
-        )
+        let xdai_home_bridge_address = self.xdai_home_bridge_address.clone();
+
+        let own_address = self.own_address.clone();
+        let secret = self.secret.clone();
+
+        // You basically just send it some coins
+        Box::new(xdai_web3.send_transaction(
+            xdai_home_bridge_address,
+            Vec::new(),
+            xdai_amount,
+            own_address,
+            secret,
+            Some(10_000_000_000u128.into()),
+            Some(100u64),
+        ))
     }
 }
 
@@ -316,8 +279,8 @@ mod tests {
 
     fn new_token_bridge() -> TokenBridge {
         let pk = PrivateKey::from_str(&format!(
-            "EF84A528565FB77{}3E407{}899A8CF",
-            "8C8B166C32C5089A01B17A4421C7", "CC7881A50"
+            "FE1FC0A7A29503BAF72274A{}601D67309E8F3{}D22",
+            "AA3ECDE6DB3E20", "29F7AB4BA52"
         ))
         .unwrap();
 
@@ -326,7 +289,7 @@ mod tests {
             Address::from_str("0x7301CFA0e1756B71869E93d4e4Dca5c7d0eb0AA6".into()).unwrap(),
             Address::from_str("0x4aa42145Aa6Ebf72e164C9bBC74fbD3788045016".into()).unwrap(),
             Address::from_str("0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359".into()).unwrap(),
-            Address::from_str("0x576724E39cdb5593196Bc669EBD7b679CE1D4b7F".into()).unwrap(),
+            Address::from_str("0x79AE13432950bF5CDC3499f8d4Cf5963c3F0d42c".into()).unwrap(),
             pk,
             "https://mainnet.infura.io/v3/4bd80ea13e964a5a9f728a68567dc784".into(),
             "https://dai.althea.org".into(),
@@ -341,27 +304,60 @@ mod tests {
     fn get_balances(
         token_bridge: TokenBridge,
     ) -> Box<Future<Item = (Uint256, Uint256), Error = Error>> {
+        println!("GET BALAALLANCES");
         Box::new(
             token_bridge
                 .eth_web3
                 .eth_get_balance(token_bridge.own_address)
-                .join(
-                    token_bridge
-                        .xdai_web3
-                        .eth_get_balance(token_bridge.own_address),
-                ),
+                .join(token_bridge.eth_web3.contract_call(
+                    token_bridge.foreign_dai_contract_address,
+                    "balanceOf(address)",
+                    &[token_bridge.own_address.into()],
+                    token_bridge.own_address,
+                ))
+                .and_then(|(eth_balance, dai_balance)| {
+                    futures::future::ok((
+                        eth_balance,
+                        Uint256::from_bytes_be(
+                            dai_balance
+                                .get(0..32)
+                                .expect("Malformed output from uniswap balanceOf call"),
+                        ),
+                    ))
+                }),
         )
     }
 
     #[test]
-    fn eth_to_xdai() {
+    fn test_eth_to_dai_swap() {
         let system = actix::System::new("test");
 
         let token_bridge = new_token_bridge();
 
         actix::spawn(
-            token_bridge
-                .convert_eth_to_xdai(eth_to_wei(0.0005f64))
+            get_balances(token_bridge.clone())
+                .join(token_bridge.dai_to_eth_price(eth_to_wei(0.01f64)))
+                .and_then(
+                    move |((old_eth_balance, old_dai_balance), one_cent_in_eth)| {
+                     
+                        token_bridge
+                            .eth_to_dai_swap(one_cent_in_eth.clone(), 60)
+                            .and_then(move |_| get_balances(token_bridge.clone()))
+                            .and_then(move |(new_eth_balance, new_dai_balance)| {
+                   
+                                assert!(
+                                    new_eth_balance < (old_eth_balance.clone() - one_cent_in_eth.clone()),
+                                    "new eth balance not low enough. new eth balance: {:?}, old_eth_balance: {:?}, one_cent_in_eth: {:?}, sum: {:?}",
+                                    new_eth_balance, old_eth_balance, one_cent_in_eth, (old_eth_balance.clone() - one_cent_in_eth.clone())
+                                );
+                                assert!(
+                                    new_dai_balance > (old_dai_balance + eth_to_wei(0.009f64)),
+                                    "new dai balance not high enough"
+                                );
+                                futures::future::ok(())
+                            })
+                    },
+                )
                 .then(|res| {
                     res.unwrap();
                     actix::System::current().stop();
@@ -373,22 +369,34 @@ mod tests {
     }
 
     #[test]
-    fn xdai_to_eth() {
-        // println!(
-        //     "TAMARIOOOOOOO: {:#x}",
-        //     Address::from_slice(&[
-        //         222, 108, 47, 103, 187, 188, 102, 220, 174, 114, 83, 226, 155, 193, 123, 244, 225,
-        //         235, 94, 14
-        //     ])
-        //     .unwrap()
-        // );
+    fn test_dai_to_eth_swap() {
         let system = actix::System::new("test");
 
         let token_bridge = new_token_bridge();
 
         actix::spawn(
-            token_bridge
-                .convert_xdai_to_eth(eth_to_wei(0.08f64))
+            get_balances(token_bridge.clone())
+                .join(token_bridge.dai_to_eth_price(eth_to_wei(0.01f64)))
+                .and_then(
+                    move |((old_eth_balance, old_dai_balance), one_cent_in_eth)| {
+                        token_bridge
+                            .dai_to_eth_swap(eth_to_wei(0.01f64), 60)
+                            .and_then(move |_| get_balances(token_bridge.clone()))
+                            .and_then(move |(new_eth_balance, new_dai_balance)| {
+                                assert!(
+                                    new_dai_balance == (old_dai_balance - eth_to_wei(0.01f64)),
+                                    "new dai balance not low enough"
+                                );
+                                assert!(
+                                    new_eth_balance
+                                        > (old_eth_balance
+                                            + (one_cent_in_eth * eth_to_wei(0.9f64))),
+                                    "new eth balance not high enough"
+                                );
+                                futures::future::ok(())
+                            })
+                    },
+                )
                 .then(|res| {
                     res.unwrap();
                     actix::System::current().stop();
@@ -399,4 +407,45 @@ mod tests {
         system.run();
     }
 
+    #[test]
+    fn test_dai_to_xdai_bridge() {
+        let system = actix::System::new("test");
+
+        let token_bridge = new_token_bridge();
+
+        actix::spawn(
+            token_bridge
+                // All we can really do here is test that it doesn't throw. Check your balances in
+                // 5-10 minutes to see if the money got transferred.
+                .dai_to_xdai_bridge(eth_to_wei(0.01f64))
+                .then(|res| {
+                    res.unwrap();
+                    actix::System::current().stop();
+                    Box::new(futures::future::ok(()))
+                }),
+        );
+
+        system.run();
+    }
+
+    #[test]
+    fn test_xdai_to_dai_bridge() {
+        let system = actix::System::new("test");
+
+        let token_bridge = new_token_bridge();
+
+        actix::spawn(
+            token_bridge
+                // All we can really do here is test that it doesn't throw. Check your balances in
+                // 5-10 minutes to see if the money got transferred.
+                .xdai_to_dai_bridge(eth_to_wei(0.01f64))
+                .then(|res| {
+                    res.unwrap();
+                    actix::System::current().stop();
+                    Box::new(futures::future::ok(()))
+                }),
+        );
+
+        system.run();
+    }
 }
