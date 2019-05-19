@@ -2,13 +2,13 @@ use clarity::abi::encode_call;
 use clarity::{Address, PrivateKey};
 use failure::{ensure, Error};
 use futures::Future;
+use futures_timer::FutureExt;
+use num::Bounded;
 use num256::Uint256;
 use std::str::FromStr;
 use std::time::Duration;
 use web30::client::Web3;
 use web30::types::Log;
-
-use futures_timer::FutureExt;
 
 #[derive(Clone)]
 pub struct TokenBridge {
@@ -158,8 +158,44 @@ impl TokenBridge {
         )
     }
 
+    pub fn approve_uniswap_dai_transfers(&self) -> Box<Future<Item = (), Error = Error>> {
+        let dai_address = self.foreign_dai_contract_address.clone();
+        let own_address = self.own_address.clone();
+        let uniswap_address = self.uniswap_address.clone();
+        let secret = self.secret.clone();
+        let web3 = self.eth_web3.clone();
+
+        let payload = encode_call(
+            "approve(address,uint256)",
+            &[uniswap_address.into(), Uint256::max_value().into()],
+        );
+
+        Box::new(
+            web3.send_transaction(
+                dai_address,
+                payload,
+                0u32.into(),
+                own_address,
+                secret,
+                None,
+                None,
+            )
+            .join(web3.wait_for_event_alt(
+                dai_address,
+                "Approval(address,address,uint256)",
+                Some(vec![own_address.into()]),
+                Some(vec![uniswap_address.into()]),
+                None,
+                |_| true,
+            ))
+            .and_then(move |_| {
+                Ok(())
+            }),
+        )
+    }
+
     /// Sell `dai_amount` Dai for ETH
-    /// Thsi function will error out if it takes longer than 'timeout' and the transaction is guaranteed not
+    /// This function will error out if it takes longer than 'timeout' and the transaction is guaranteed not
     /// to be accepted on the blockchain after this time.
     pub fn dai_to_eth_swap(
         &self,
@@ -177,8 +213,13 @@ impl TokenBridge {
                 .and_then(move |(block, expected_eth)| {
                     // Equivalent to `amount * (1 - 0.025)` without using decimals
                     let expected_eth = (expected_eth / 40u64.into()) * 39u64.into();
-
                     let deadline = block.timestamp + timeout.into();
+
+                    println!(
+                        "DAI AMT: {:?}, EXPECTED ETH: {:?}",
+                        dai_amount, expected_eth
+                    );
+
                     let payload = encode_call(
                         "tokenToEthSwapInput(uint256,uint256,uint256)",
                         &[
@@ -187,7 +228,7 @@ impl TokenBridge {
                             deadline.into(),
                         ],
                     );
-           
+
                     web3.send_transaction(
                         uniswap_address,
                         payload,
@@ -212,7 +253,6 @@ impl TokenBridge {
                         let transfered_eth = Uint256::from_bytes_be(&response.topics[3]);
                         Ok(transfered_eth)
                     })
-                   
                 }),
         )
     }
@@ -375,28 +415,33 @@ mod tests {
         let token_bridge = new_token_bridge();
 
         actix::spawn(
-            get_balances(token_bridge.clone())
-                .join(token_bridge.dai_to_eth_price(eth_to_wei(0.01f64)))
-                .and_then(
-                    move |((old_eth_balance, old_dai_balance), one_cent_in_eth)| {
-                        token_bridge
-                            .dai_to_eth_swap(eth_to_wei(0.01f64), 60)
-                            .and_then(move |_| get_balances(token_bridge.clone()))
-                            .and_then(move |(new_eth_balance, new_dai_balance)| {
-                                assert!(
-                                    new_dai_balance == (old_dai_balance - eth_to_wei(0.01f64)),
-                                    "new dai balance not low enough"
-                                );
-                                assert!(
-                                    new_eth_balance
-                                        > (old_eth_balance
-                                            + (one_cent_in_eth * eth_to_wei(0.9f64))),
-                                    "new eth balance not high enough"
-                                );
-                                futures::future::ok(())
-                            })
-                    },
-                )
+            token_bridge
+                .approve_uniswap_dai_transfers()
+                .and_then(|_| {
+                    get_balances(token_bridge.clone())
+                        .join(token_bridge.dai_to_eth_price(eth_to_wei(0.01f64)))
+                        .and_then(
+                            move |((old_eth_balance, old_dai_balance), one_cent_in_eth)| {
+                                token_bridge
+                                    .dai_to_eth_swap(eth_to_wei(0.01f64), 60)
+                                    .and_then(move |_| get_balances(token_bridge.clone()))
+                                    .and_then(move |(new_eth_balance, new_dai_balance)| {
+                                        assert!(
+                                            new_dai_balance
+                                                == (old_dai_balance - eth_to_wei(0.01f64)),
+                                            "new dai balance not low enough"
+                                        );
+                                        assert!(
+                                            new_eth_balance
+                                                > (old_eth_balance
+                                                    + (one_cent_in_eth * eth_to_wei(0.9f64))),
+                                            "new eth balance not high enough"
+                                        );
+                                        futures::future::ok(())
+                                    })
+                            },
+                        )
+                })
                 .then(|res| {
                     res.unwrap();
                     actix::System::current().stop();
