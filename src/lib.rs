@@ -1,14 +1,14 @@
 use clarity::abi::encode_call;
 use clarity::{Address, PrivateKey};
-use failure::{ensure, Error};
+use failure::Error;
 use futures::Future;
 use futures_timer::FutureExt;
 use num::Bounded;
 use num256::Uint256;
-use std::str::FromStr;
+
 use std::time::Duration;
 use web30::client::Web3;
-use web30::types::{Log, SendTxOption};
+use web30::types::SendTxOption;
 
 #[derive(Clone)]
 pub struct TokenBridge {
@@ -136,7 +136,10 @@ impl TokenBridge {
                         eth_amount,
                         own_address,
                         secret,
-                        vec![],
+                        vec![
+                            SendTxOption::GasPriceMultiplier(2u64.into()),
+                            SendTxOption::GasLimit(60_000u64.into()),
+                        ],
                     )
                     .join(
                         web3.wait_for_event_alt(
@@ -334,33 +337,6 @@ mod tests {
         wei.into()
     }
 
-    fn get_balances(
-        token_bridge: TokenBridge,
-    ) -> Box<Future<Item = (Uint256, Uint256), Error = Error>> {
-        println!("GET BALAALLANCES");
-        Box::new(
-            token_bridge
-                .eth_web3
-                .eth_get_balance(token_bridge.own_address)
-                .join(token_bridge.eth_web3.contract_call(
-                    token_bridge.foreign_dai_contract_address,
-                    "balanceOf(address)",
-                    &[token_bridge.own_address.into()],
-                    token_bridge.own_address,
-                ))
-                .and_then(|(eth_balance, dai_balance)| {
-                    futures::future::ok((
-                        eth_balance,
-                        Uint256::from_bytes_be(
-                            dai_balance
-                                .get(0..32)
-                                .expect("Malformed output from uniswap balanceOf call"),
-                        ),
-                    ))
-                }),
-        )
-    }
-
     #[test]
     fn test_eth_to_dai_swap() {
         let system = actix::System::new("test");
@@ -391,7 +367,7 @@ mod tests {
         actix::spawn(
             token_bridge
                 .approve_uniswap_dai_transfers()
-                .and_then(move |_| token_bridge.dai_to_eth_swap(eth_to_wei(0.1f64), 600))
+                .and_then(move |_| token_bridge.dai_to_eth_swap(eth_to_wei(0.01f64), 600))
                 .then(|res| {
                     res.unwrap();
                     actix::System::current().stop();
