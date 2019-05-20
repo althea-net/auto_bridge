@@ -7,8 +7,8 @@ use num::Bounded;
 use num256::Uint256;
 use std::str::FromStr;
 use std::time::Duration;
-use web30::client::Web3;
-use web30::types::Log;
+use web30::client::{Web3};
+use web30::types::{Log,SendTxOption};
 
 #[derive(Clone)]
 pub struct TokenBridge {
@@ -136,8 +136,7 @@ impl TokenBridge {
                         eth_amount,
                         own_address,
                         secret,
-                        None,
-                        None,
+                        vec![]
                     )
                     .join(
                         web3.wait_for_event_alt(
@@ -177,8 +176,8 @@ impl TokenBridge {
                 0u32.into(),
                 own_address,
                 secret,
-                None,
-                None,
+                vec![SendTxOption::GasPrice(5_000_000_000u64.into())]
+         
             )
             .join(web3.wait_for_event_alt(
                 dai_address,
@@ -235,8 +234,7 @@ impl TokenBridge {
                         0u32.into(),
                         own_address,
                         secret,
-                        None,
-                        None,
+                        vec![SendTxOption::GasPriceMultiplier(2u64.into()), SendTxOption::GasLimit(60_000u64.into())]
                     )
                     .join(
                         web3.wait_for_event_alt(
@@ -282,8 +280,7 @@ impl TokenBridge {
             0u32.into(),
             own_address,
             secret,
-            None,
-            None,
+            vec![]
         ))
     }
 
@@ -306,8 +303,7 @@ impl TokenBridge {
             xdai_amount,
             own_address,
             secret,
-            Some(10_000_000_000u128.into()),
-            Some(100u64),
+            vec![SendTxOption::GasPrice(10_000_000_000u128.into()), SendTxOption::NetworkId(100u64)]
         ))
     }
 }
@@ -331,7 +327,7 @@ mod tests {
             Address::from_str("0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359".into()).unwrap(),
             Address::from_str("0x79AE13432950bF5CDC3499f8d4Cf5963c3F0d42c".into()).unwrap(),
             pk,
-            "https://mainnet.infura.io/v3/4bd80ea13e964a5a9f728a68567dc784".into(),
+            "https://eth.althea.org".into(),
             "https://dai.althea.org".into(),
         )
     }
@@ -414,16 +410,17 @@ mod tests {
 
         let token_bridge = new_token_bridge();
 
+
         actix::spawn(
-            token_bridge
-                .approve_uniswap_dai_transfers()
-                .and_then(|_| {
+            // token_bridge
+            //     .approve_uniswap_dai_transfers()
+            //     .and_then(|_| {
                     get_balances(token_bridge.clone())
                         .join(token_bridge.dai_to_eth_price(eth_to_wei(0.01f64)))
                         .and_then(
                             move |((old_eth_balance, old_dai_balance), one_cent_in_eth)| {
                                 token_bridge
-                                    .dai_to_eth_swap(eth_to_wei(0.01f64), 60)
+                                    .dai_to_eth_swap(eth_to_wei(0.1f64), 600)
                                     .and_then(move |_| get_balances(token_bridge.clone()))
                                     .and_then(move |(new_eth_balance, new_dai_balance)| {
                                         assert!(
@@ -441,7 +438,7 @@ mod tests {
                                     })
                             },
                         )
-                })
+                // })
                 .then(|res| {
                     res.unwrap();
                     actix::System::current().stop();
