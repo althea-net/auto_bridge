@@ -5,7 +5,7 @@ authors = ["Jehan <jehan.tremback@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-web30 = { path = "../web30" }
+web30 = { git = "https://github.com/althea-mesh/web30", branch = "master" }
 actix = "0.7.9"
 futures = "0.1.26"
 failure = "0.1.5"

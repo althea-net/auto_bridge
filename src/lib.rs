@@ -5,7 +5,7 @@ use futures::Future;
 use futures_timer::FutureExt;
 use num::Bounded;
 use num256::Uint256;
-
+use std::str::FromStr;
 use std::time::Duration;
 use web30::client::Web3;
 use web30::types::SendTxOption;
@@ -43,8 +43,8 @@ impl TokenBridge {
             foreign_dai_contract_address,
             own_address,
             secret,
-            xdai_web3: Web3::new(&xdai_full_node_url),
-            eth_web3: Web3::new(&eth_full_node_url),
+            xdai_web3: Web3::new(&xdai_full_node_url, Duration::from_secs(10)),
+            eth_web3: Web3::new(&eth_full_node_url, Duration::from_secs(10)),
         }
     }
 
