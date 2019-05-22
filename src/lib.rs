@@ -1,11 +1,11 @@
 use clarity::abi::encode_call;
 use clarity::{Address, PrivateKey};
+use failure::bail;
 use failure::Error;
 use futures::Future;
 use futures_timer::FutureExt;
 use num::Bounded;
 use num256::Uint256;
-use std::str::FromStr;
 use std::time::Duration;
 use web30::client::Web3;
 use web30::types::SendTxOption;
@@ -65,11 +65,13 @@ impl TokenBridge {
             ));
 
         Box::new(props.and_then(move |(input_reserve, output_reserve)| {
-            let output_reserve = Uint256::from_bytes_be(
-                output_reserve
-                    .get(0..32)
-                    .expect("Malformed output from uniswap balanceOf call"),
-            );
+            let output_reserve = Uint256::from_bytes_be(match output_reserve.get(0..32) {
+                Some(val) => val,
+                None => bail!(
+                    "Malformed output from uniswap balanceOf call {:?}",
+                    output_reserve
+                ),
+            });
 
             let numerator = amount.clone() * output_reserve * 997u64.into();
             let denominator = input_reserve * 1000u64.into() + amount * 997u64.into();
@@ -77,7 +79,7 @@ impl TokenBridge {
         }))
     }
 
-    /// Price of Dai in ETH
+    /// gets Price of Dai in ETH either succeeds or fails in 10 seconds
     pub fn dai_to_eth_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
@@ -106,7 +108,7 @@ impl TokenBridge {
     }
 
     /// Sell `eth_amount` ETH for Dai.
-    /// Thsi function will error out if it takes longer than 'timeout' and the transaction is guaranteed not
+    /// This function will error out if it takes longer than 'timeout' and the transaction is guaranteed not
     /// to be accepted on the blockchain after this time.
     pub fn eth_to_dai_swap(
         &self,
@@ -160,7 +162,12 @@ impl TokenBridge {
         )
     }
 
-    pub fn approve_uniswap_dai_transfers(&self) -> Box<Future<Item = (), Error = Error>> {
+    /// Sends transaction to the DAI contract to approve uniswap transactions, this future will not
+    /// resolve until the process is either successful for the timeout finishes
+    pub fn approve_uniswap_dai_transfers(
+        &self,
+        timeout: Duration,
+    ) -> Box<Future<Item = (), Error = Error>> {
         let dai_address = self.foreign_dai_contract_address.clone();
         let own_address = self.own_address.clone();
         let uniswap_address = self.uniswap_address.clone();
@@ -189,6 +196,7 @@ impl TokenBridge {
                 None,
                 |_| true,
             ))
+            .timeout(timeout)
             .and_then(move |_| Ok(())),
         )
     }
@@ -306,12 +314,36 @@ impl TokenBridge {
             ],
         ))
     }
+
+    pub fn get_dai_balance(&self, address: Address) -> Box<Future<Item = Uint256, Error = Error>> {
+        let web3 = self.eth_web3.clone();
+        let dai_address = self.foreign_dai_contract_address;
+        let own_address = self.own_address;
+        Box::new(
+            web3.contract_call(
+                dai_address,
+                "balanceOf(address)",
+                &[address.into()],
+                own_address,
+            )
+            .and_then(|balance| {
+                Ok(Uint256::from_bytes_be(match balance.get(0..32) {
+                    Some(val) => val,
+                    None => bail!(
+                        "Got bad output for DAI balance from the full node {:?}",
+                        balance
+                    ),
+                }))
+            }),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix;
+    use std::str::FromStr;
 
     fn new_token_bridge() -> TokenBridge {
         let pk = PrivateKey::from_str(&format!(
@@ -366,7 +398,7 @@ mod tests {
 
         actix::spawn(
             token_bridge
-                .approve_uniswap_dai_transfers()
+                .approve_uniswap_dai_transfers(Duration::from_secs(600))
                 .and_then(move |_| token_bridge.dai_to_eth_swap(eth_to_wei(0.01f64), 600))
                 .then(|res| {
                     res.unwrap();
