@@ -16,4 +16,4 @@ rand = "0.6.5"
 num = "0.2"
 
 [patch.crates-io]
-clarity = { git = "https://github.com/althea-mesh/clarity", branch = "better-conversions" }
+clarity = { git = "https://github.com/althea-mesh/clarity" }

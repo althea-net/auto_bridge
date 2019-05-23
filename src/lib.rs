@@ -52,59 +52,50 @@ impl TokenBridge {
     pub fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
-        let dai_address = self.foreign_dai_contract_address.clone();
         let own_address = self.own_address.clone();
 
-        let props = web3
-            .eth_get_balance(uniswap_address)
-            .join(web3.contract_call(
-                dai_address,
-                "balanceOf(address)",
-                &[uniswap_address.into()],
+        Box::new(
+            web3.contract_call(
+                uniswap_address,
+                "getEthToTokenInputPrice(uint256)",
+                &[amount.into()],
                 own_address,
-            ));
-
-        Box::new(props.and_then(move |(input_reserve, output_reserve)| {
-            let output_reserve = Uint256::from_bytes_be(match output_reserve.get(0..32) {
-                Some(val) => val,
-                None => bail!(
-                    "Malformed output from uniswap balanceOf call {:?}",
-                    output_reserve
-                ),
-            });
-
-            let numerator = amount.clone() * output_reserve * 997u64.into();
-            let denominator = input_reserve * 1000u64.into() + amount * 997u64.into();
-            Ok(numerator / denominator)
-        }))
+            )
+            .and_then(move |tokens_bought| {
+                Ok(Uint256::from_bytes_be(match tokens_bought.get(0..32) {
+                    Some(val) => val,
+                    None => bail!(
+                        "Malformed output from uniswap getEthToTokenInputPrice call {:?}",
+                        tokens_bought
+                    ),
+                }))
+            }),
+        )
     }
 
-    /// gets Price of Dai in ETH either succeeds or fails in 10 seconds
+    /// Price of Dai in Eth
     pub fn dai_to_eth_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
-        let dai_address = self.foreign_dai_contract_address.clone();
         let own_address = self.own_address.clone();
 
-        let props = web3
-            .eth_get_balance(uniswap_address)
-            .join(web3.contract_call(
-                dai_address,
-                "balanceOf(address)",
-                &[uniswap_address.into()],
+        Box::new(
+            web3.contract_call(
+                uniswap_address,
+                "getTokenToEthInputPrice(uint256)",
+                &[amount.into()],
                 own_address,
-            ));
-
-        Box::new(props.and_then(move |(output_reserve, input_reserve)| {
-            let input_reserve = Uint256::from_bytes_be(
-                input_reserve
-                    .get(0..32)
-                    .expect("Malformed output from uniswap balanceOf call"),
-            );
-            let numerator = amount.clone() * output_reserve * 997u64.into();
-            let denominator = input_reserve * 1000u64.into() + amount * 997u64.into();
-            Ok(numerator / denominator)
-        }))
+            )
+            .and_then(move |eth_bought| {
+                Ok(Uint256::from_bytes_be(match eth_bought.get(0..32) {
+                    Some(val) => val,
+                    None => bail!(
+                        "Malformed output from uniswap getTokenToEthInputPrice call {:?}",
+                        eth_bought
+                    ),
+                }))
+            }),
+        )
     }
 
     /// Sell `eth_amount` ETH for Dai.
