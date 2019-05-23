@@ -234,49 +234,64 @@ impl TokenBridge {
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
         let web3 = self.eth_web3.clone();
+        let salf = self.clone();
 
         Box::new(
-            web3.eth_get_latest_block()
-                .join(self.dai_to_eth_price(dai_amount.clone()))
-                .and_then(move |(block, expected_eth)| {
-                    // Equivalent to `amount * (1 - 0.025)` without using decimals
-                    let expected_eth = (expected_eth / 40u64.into()) * 39u64.into();
-                    let deadline = block.timestamp + timeout.into();
-                    let payload = encode_call(
-                        "tokenToEthSwapInput(uint256,uint256,uint256)",
-                        &[
-                            dai_amount.into(),
-                            expected_eth.clone().into(),
-                            deadline.into(),
-                        ],
-                    );
+            self.check_if_uniswap_dai_approved()
+                .and_then({
+                    let salf = self.clone();
+                    move |is_approved| {
+                        if is_approved {
+                            Box::new(futures::future::ok(()))
+                                as Box<Future<Item = (), Error = Error>>
+                        } else {
+                            salf.approve_uniswap_dai_transfers(Duration::from_secs(600))
+                        }
+                    }
+                })
+                .and_then(move |_| {
+                    web3.eth_get_latest_block()
+                        .join(salf.dai_to_eth_price(dai_amount.clone()))
+                        .and_then(move |(block, expected_eth)| {
+                            // Equivalent to `amount * (1 - 0.025)` without using decimals
+                            let expected_eth = (expected_eth / 40u64.into()) * 39u64.into();
+                            let deadline = block.timestamp + timeout.into();
+                            let payload = encode_call(
+                                "tokenToEthSwapInput(uint256,uint256,uint256)",
+                                &[
+                                    dai_amount.into(),
+                                    expected_eth.clone().into(),
+                                    deadline.into(),
+                                ],
+                            );
 
-                    web3.send_transaction(
-                        uniswap_address,
-                        payload,
-                        0u32.into(),
-                        own_address,
-                        secret,
-                        vec![
-                            SendTxOption::GasPriceMultiplier(2u64.into()),
-                            SendTxOption::GasLimit(60_000u64.into()),
-                        ],
-                    )
-                    .join(
-                        web3.wait_for_event_alt(
-                            uniswap_address,
-                            "EthPurchase(address,uint256,uint256)",
-                            Some(vec![own_address.into()]),
-                            None,
-                            None,
-                            |_| true,
-                        )
-                        .timeout(Duration::from_secs(timeout)),
-                    )
-                    .and_then(move |(_tx, response)| {
-                        let transfered_eth = Uint256::from_bytes_be(&response.topics[3]);
-                        Ok(transfered_eth)
-                    })
+                            web3.send_transaction(
+                                uniswap_address,
+                                payload,
+                                0u32.into(),
+                                own_address,
+                                secret,
+                                vec![
+                                    SendTxOption::GasPriceMultiplier(2u64.into()),
+                                    SendTxOption::GasLimit(60_000u64.into()),
+                                ],
+                            )
+                            .join(
+                                web3.wait_for_event_alt(
+                                    uniswap_address,
+                                    "EthPurchase(address,uint256,uint256)",
+                                    Some(vec![own_address.into()]),
+                                    None,
+                                    None,
+                                    |_| true,
+                                )
+                                .timeout(Duration::from_secs(timeout)),
+                            )
+                            .and_then(move |(_tx, response)| {
+                                let transfered_eth = Uint256::from_bytes_be(&response.topics[3]);
+                                Ok(transfered_eth)
+                            })
+                        })
                 }),
         )
     }
