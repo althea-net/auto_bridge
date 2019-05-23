@@ -391,6 +391,50 @@ mod tests {
     }
 
     #[test]
+    fn test_is_approved() {
+        let pk = PrivateKey::from_str(&format!(
+            "FE1FC0A7A29503BAF72274A{}601D67309E8F3{}D22",
+            "AA3ECDE6DB3E20", "29F7AB4BA52"
+        ))
+        .unwrap();
+
+        let system = actix::System::new("test");
+
+        let token_bridge = new_token_bridge();
+
+        let unapproved_token_bridge = TokenBridge::new(
+            Address::from_str("0x09cabEC1eAd1c0Ba254B09efb3EE13841712bE14".into()).unwrap(),
+            Address::from_str("0x7301CFA0e1756B71869E93d4e4Dca5c7d0eb0AA6".into()).unwrap(),
+            Address::from_str("0x4aa42145Aa6Ebf72e164C9bBC74fbD3788045016".into()).unwrap(),
+            Address::from_str("0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359".into()).unwrap(),
+            Address::from_str("0x6d943740746934b2f5D9c9E6Cb1908758A42452f".into()).unwrap(),
+            pk,
+            "https://eth.althea.org".into(),
+            "https://dai.althea.org".into(),
+        );
+
+        actix::spawn(
+            token_bridge
+                .check_if_uniswap_dai_approved()
+                .and_then(move |is_approved| {
+                    assert!(is_approved);
+                    unapproved_token_bridge
+                        .check_if_uniswap_dai_approved()
+                        .and_then(move |is_approved| {
+                            assert!(!is_approved);
+                            Ok(())
+                        })
+                })
+                .then(|res| {
+                    res.unwrap();
+                    actix::System::current().stop();
+                    Box::new(futures::future::ok(()))
+                }),
+        );
+        system.run();
+    }
+
+    #[test]
     fn test_eth_to_dai_swap() {
         let system = actix::System::new("test");
 
