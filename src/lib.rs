@@ -153,6 +153,36 @@ impl TokenBridge {
         )
     }
 
+    /// Checks if the uniswap contract has been approved to spend dai from our account.
+    pub fn check_if_uniswap_dai_approved(&self) -> Box<Future<Item = bool, Error = Error>> {
+        let web3 = self.eth_web3.clone();
+        let uniswap_address = self.uniswap_address.clone();
+        let dai_address = self.foreign_dai_contract_address.clone();
+        let own_address = self.own_address.clone();
+
+        Box::new(
+            web3.contract_call(
+                dai_address,
+                "allowance(address,address)",
+                &[own_address.into(), uniswap_address.into()],
+                own_address,
+            )
+            .and_then(move |allowance| {
+                let allowance = Uint256::from_bytes_be(match allowance.get(0..32) {
+                    Some(val) => val,
+                    None => bail!(
+                        "Malformed output from uniswap getTokenToEthInputPrice call {:?}",
+                        allowance
+                    ),
+                });
+
+                // Check if the allowance remaining is greater than half of a Uint256- it's as good
+                // a test as any.
+                Ok(allowance > (Uint256::max_value() / 2u32.into()))
+            }),
+        )
+    }
+
     /// Sends transaction to the DAI contract to approve uniswap transactions, this future will not
     /// resolve until the process is either successful for the timeout finishes
     pub fn approve_uniswap_dai_transfers(
