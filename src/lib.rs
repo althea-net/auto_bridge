@@ -12,17 +12,17 @@ use web30::types::SendTxOption;
 
 #[derive(Clone)]
 pub struct TokenBridge {
-    xdai_web3: Web3,
-    eth_web3: Web3,
-    uniswap_address: Address,
+    pub xdai_web3: Web3,
+    pub eth_web3: Web3,
+    pub uniswap_address: Address,
     /// This is the address of the xDai bridge on Eth
-    xdai_foreign_bridge_address: Address,
+    pub xdai_foreign_bridge_address: Address,
     /// This is the address of the xDai bridge on xDai
-    xdai_home_bridge_address: Address,
+    pub xdai_home_bridge_address: Address,
     /// This is the address of the Dai token contract on Eth
-    foreign_dai_contract_address: Address,
-    own_address: Address,
-    secret: PrivateKey,
+    pub foreign_dai_contract_address: Address,
+    pub own_address: Address,
+    pub secret: PrivateKey,
 }
 
 impl TokenBridge {
