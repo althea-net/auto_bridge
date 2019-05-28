@@ -48,6 +48,37 @@ impl TokenBridge {
         }
     }
 
+    /// This just sends some Eth. Returns the tx hash.
+    pub fn eth_transfer(
+        &self,
+        to: Address,
+        amount: Uint256,
+        timeout: u64,
+    ) -> Box<Future<Item = (), Error = Error>> {
+        let web3 = self.eth_web3.clone();
+        let own_address = self.own_address.clone();
+        let secret = self.secret.clone();
+
+        Box::new(
+            web3.send_transaction(
+                to,
+                Vec::new(),
+                amount,
+                own_address,
+                secret,
+                vec![
+                    SendTxOption::GasPriceMultiplier(2u64.into()),
+                    SendTxOption::GasLimit(23_000u64.into()),
+                ],
+            )
+            .and_then(move |tx_hash| {
+                web3.wait_for_transaction(tx_hash.into())
+                    .timeout(Duration::from_secs(timeout));
+                Ok(())
+            }),
+        )
+    }
+
     /// Price of ETH in Dai
     pub fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
