@@ -6,14 +6,11 @@ edition = "2018"
 
 [dependencies]
 web30 = { git = "https://github.com/althea-mesh/web30", branch = "master" }
-actix = "0.7.9"
-futures = "0.1.26"
-failure = "0.1.5"
-num256 = "0.2.11"
-clarity = "0.1.20"
-futures-timer = "0.1.1"
-rand = "0.6.5"
+actix = "0.7"
+futures = "0.1"
+failure = "0.1"
+num256 = "0.2"
+clarity = "0.1"
+futures-timer = "0.1"
+rand = "0.6"
 num = "0.2"
-
-[patch.crates-io]
-clarity = { git = "https://github.com/althea-mesh/clarity" }
