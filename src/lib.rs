@@ -326,6 +326,7 @@ impl TokenBridge {
     pub fn dai_to_xdai_bridge(
         &self,
         dai_amount: Uint256,
+        timeout: u64,
     ) -> Box<Future<Item = Uint256, Error = Error>> {
         let eth_web3 = self.eth_web3.clone();
         let foreign_dai_contract_address = self.foreign_dai_contract_address.clone();
@@ -335,20 +336,29 @@ impl TokenBridge {
 
         // You basically just send it some coins
         // We have no idea when this has succeeded since the events are not indexed
-        Box::new(eth_web3.send_transaction(
-            foreign_dai_contract_address,
-            encode_call(
-                "transfer(address,uint256)",
-                &[
-                    xdai_foreign_bridge_address.into(),
-                    dai_amount.clone().into(),
-                ],
-            ),
-            0u32.into(),
-            own_address,
-            secret,
-            vec![SendTxOption::GasLimit(80_000u64.into())],
-        ))
+        Box::new(
+            eth_web3
+                .send_transaction(
+                    foreign_dai_contract_address,
+                    encode_call(
+                        "transfer(address,uint256)",
+                        &[
+                            xdai_foreign_bridge_address.into(),
+                            dai_amount.clone().into(),
+                        ],
+                    ),
+                    0u32.into(),
+                    own_address,
+                    secret,
+                    vec![SendTxOption::GasLimit(80_000u64.into())],
+                )
+                .and_then(move |tx_hash| {
+                    eth_web3
+                        .wait_for_transaction(tx_hash.into())
+                        .timeout(Duration::from_secs(timeout));
+                    Ok(dai_amount)
+                }),
+        )
     }
 
     /// Bridge `xdai_amount` xdai to dai
@@ -526,7 +536,7 @@ mod tests {
             token_bridge
                 // All we can really do here is test that it doesn't throw. Check your balances in
                 // 5-10 minutes to see if the money got transferred.
-                .dai_to_xdai_bridge(eth_to_wei(0.01f64))
+                .dai_to_xdai_bridge(eth_to_wei(0.01f64), 600)
                 .then(|res| {
                     res.unwrap();
                     actix::System::current().stop();
