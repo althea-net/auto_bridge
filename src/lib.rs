@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 use clarity::abi::encode_call;
 use clarity::{Address, PrivateKey};
 use failure::bail;
@@ -66,10 +69,7 @@ impl TokenBridge {
                 amount,
                 own_address,
                 secret,
-                vec![
-                    SendTxOption::GasPriceMultiplier(2u64.into()),
-                    SendTxOption::GasLimit(23_000u64.into()),
-                ],
+                vec![SendTxOption::GasLimit(23_000u64.into())],
             )
             .and_then(move |tx_hash| {
                 web3.wait_for_transaction(tx_hash.into())
@@ -160,10 +160,7 @@ impl TokenBridge {
                         eth_amount,
                         own_address,
                         secret,
-                        vec![
-                            SendTxOption::GasPriceMultiplier(2u64.into()),
-                            SendTxOption::GasLimit(60_000u64.into()),
-                        ],
+                        vec![SendTxOption::GasLimit(80_000u64.into())],
                     )
                     .join(
                         web3.wait_for_event_alt(
@@ -238,7 +235,7 @@ impl TokenBridge {
                 0u32.into(),
                 own_address,
                 secret,
-                vec![SendTxOption::GasPriceMultiplier(2u64.into())],
+                vec![],
             )
             .join(web3.wait_for_event_alt(
                 dai_address,
@@ -272,6 +269,7 @@ impl TokenBridge {
                 .and_then({
                     let salf = self.clone();
                     move |is_approved| {
+                        trace!("uniswap approved {}", is_approved);
                         if is_approved {
                             Box::new(futures::future::ok(()))
                                 as Box<Future<Item = (), Error = Error>>
@@ -302,10 +300,7 @@ impl TokenBridge {
                                 0u32.into(),
                                 own_address,
                                 secret,
-                                vec![
-                                    SendTxOption::GasPriceMultiplier(2u64.into()),
-                                    SendTxOption::GasLimit(60_000u64.into()),
-                                ],
+                                vec![SendTxOption::GasLimit(80_000u64.into())],
                             )
                             .join(
                                 web3.wait_for_event_alt(
@@ -352,10 +347,7 @@ impl TokenBridge {
             0u32.into(),
             own_address,
             secret,
-            vec![
-                SendTxOption::GasPriceMultiplier(2u64.into()),
-                SendTxOption::GasLimit(60_000u64.into()),
-            ],
+            vec![SendTxOption::GasLimit(80_000u64.into())],
         ))
     }
 
