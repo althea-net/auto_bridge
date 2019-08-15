@@ -57,7 +57,7 @@ impl TokenBridge {
         to: Address,
         amount: Uint256,
         timeout: u64,
-    ) -> Box<Future<Item = (), Error = Error>> {
+    ) -> Box<dyn Future<Item = (), Error = Error>> {
         let web3 = self.eth_web3.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
@@ -80,7 +80,7 @@ impl TokenBridge {
     }
 
     /// Price of ETH in Dai
-    pub fn eth_to_dai_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    pub fn eth_to_dai_price(&self, amount: Uint256) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
@@ -105,7 +105,7 @@ impl TokenBridge {
     }
 
     /// Price of Dai in Eth
-    pub fn dai_to_eth_price(&self, amount: Uint256) -> Box<Future<Item = Uint256, Error = Error>> {
+    pub fn dai_to_eth_price(&self, amount: Uint256) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
@@ -136,7 +136,7 @@ impl TokenBridge {
         &self,
         eth_amount: Uint256,
         timeout: u64,
-    ) -> Box<Future<Item = Uint256, Error = Error>> {
+    ) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
@@ -182,7 +182,7 @@ impl TokenBridge {
     }
 
     /// Checks if the uniswap contract has been approved to spend dai from our account.
-    pub fn check_if_uniswap_dai_approved(&self) -> Box<Future<Item = bool, Error = Error>> {
+    pub fn check_if_uniswap_dai_approved(&self) -> Box<dyn Future<Item = bool, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let dai_address = self.foreign_dai_contract_address.clone();
@@ -216,7 +216,7 @@ impl TokenBridge {
     pub fn approve_uniswap_dai_transfers(
         &self,
         timeout: Duration,
-    ) -> Box<Future<Item = (), Error = Error>> {
+    ) -> Box<dyn Future<Item = (), Error = Error>> {
         let dai_address = self.foreign_dai_contract_address.clone();
         let own_address = self.own_address.clone();
         let uniswap_address = self.uniswap_address.clone();
@@ -257,7 +257,7 @@ impl TokenBridge {
         &self,
         dai_amount: Uint256,
         timeout: u64,
-    ) -> Box<Future<Item = Uint256, Error = Error>> {
+    ) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
         let secret = self.secret.clone();
@@ -272,7 +272,7 @@ impl TokenBridge {
                         trace!("uniswap approved {}", is_approved);
                         if is_approved {
                             Box::new(futures::future::ok(()))
-                                as Box<Future<Item = (), Error = Error>>
+                                as Box<dyn Future<Item = (), Error = Error>>
                         } else {
                             salf.approve_uniswap_dai_transfers(Duration::from_secs(600))
                         }
@@ -327,7 +327,7 @@ impl TokenBridge {
         &self,
         dai_amount: Uint256,
         timeout: u64,
-    ) -> Box<Future<Item = Uint256, Error = Error>> {
+    ) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let eth_web3 = self.eth_web3.clone();
         let foreign_dai_contract_address = self.foreign_dai_contract_address.clone();
         let xdai_foreign_bridge_address = self.xdai_foreign_bridge_address.clone();
@@ -365,7 +365,7 @@ impl TokenBridge {
     pub fn xdai_to_dai_bridge(
         &self,
         xdai_amount: Uint256,
-    ) -> Box<Future<Item = Uint256, Error = Error>> {
+    ) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let xdai_web3 = self.xdai_web3.clone();
 
         let xdai_home_bridge_address = self.xdai_home_bridge_address.clone();
@@ -387,7 +387,7 @@ impl TokenBridge {
         ))
     }
 
-    pub fn get_dai_balance(&self, address: Address) -> Box<Future<Item = Uint256, Error = Error>> {
+    pub fn get_dai_balance(&self, address: Address) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let dai_address = self.foreign_dai_contract_address;
         let own_address = self.own_address;
