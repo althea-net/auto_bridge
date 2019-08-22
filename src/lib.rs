@@ -63,24 +63,20 @@ impl TokenBridge {
         let secret = self.secret.clone();
 
         Box::new(
-            web3.send_transaction(
-                to,
-                Vec::new(),
-                amount,
-                own_address,
-                secret,
-                vec![],
-            )
-            .and_then(move |tx_hash| {
-                web3.wait_for_transaction(tx_hash.into())
-                    .timeout(Duration::from_secs(timeout));
-                Ok(())
-            }),
+            web3.send_transaction(to, Vec::new(), amount, own_address, secret, vec![])
+                .and_then(move |tx_hash| {
+                    web3.wait_for_transaction(tx_hash.into())
+                        .timeout(Duration::from_secs(timeout));
+                    Ok(())
+                }),
         )
     }
 
     /// Price of ETH in Dai
-    pub fn eth_to_dai_price(&self, amount: Uint256) -> Box<dyn Future<Item = Uint256, Error = Error>> {
+    pub fn eth_to_dai_price(
+        &self,
+        amount: Uint256,
+    ) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
@@ -105,7 +101,10 @@ impl TokenBridge {
     }
 
     /// Price of Dai in Eth
-    pub fn dai_to_eth_price(&self, amount: Uint256) -> Box<dyn Future<Item = Uint256, Error = Error>> {
+    pub fn dai_to_eth_price(
+        &self,
+        amount: Uint256,
+    ) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let uniswap_address = self.uniswap_address.clone();
         let own_address = self.own_address.clone();
@@ -387,7 +386,10 @@ impl TokenBridge {
         ))
     }
 
-    pub fn get_dai_balance(&self, address: Address) -> Box<dyn Future<Item = Uint256, Error = Error>> {
+    pub fn get_dai_balance(
+        &self,
+        address: Address,
+    ) -> Box<dyn Future<Item = Uint256, Error = Error>> {
         let web3 = self.eth_web3.clone();
         let dai_address = self.foreign_dai_contract_address;
         let own_address = self.own_address;
