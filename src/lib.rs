@@ -69,7 +69,7 @@ impl TokenBridge {
                 amount,
                 own_address,
                 secret,
-                vec![SendTxOption::GasLimit(23_000u64.into())],
+                vec![],
             )
             .and_then(move |tx_hash| {
                 web3.wait_for_transaction(tx_hash.into())
